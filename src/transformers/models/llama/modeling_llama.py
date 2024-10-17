@@ -1066,6 +1066,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+        # print("model_input:", input_ids.shape)
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -1132,7 +1133,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
                 input_ids = input_ids[:, -cache_position.shape[0] :]
             elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
                 input_ids = input_ids[:, cache_position]
-
+        
         if attention_mask is not None and position_ids is None:
             # create position_ids on the fly for batch generation
             position_ids = attention_mask.long().cumsum(-1) - 1

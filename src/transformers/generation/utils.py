@@ -26,6 +26,10 @@ import torch.distributed as dist
 from torch import nn
 from torch.nn import functional as F
 
+from transformers import AutoTokenizer
+main_checkpoint = "meta-llama/Llama-2-13b-hf"
+tokenizer_ = AutoTokenizer.from_pretrained(main_checkpoint)
+
 from ..cache_utils import (
     Cache,
     DynamicCache,
@@ -1181,8 +1185,8 @@ class GenerationMixin:
                     "Ensure you load the assistant with the correct encoder-decoder class, e.g. `AutoModelForSpeechSeq2Seq` for Whisper."
                 )
 
-        if not self.config.vocab_size == assistant_model.config.vocab_size:
-            raise ValueError("Make sure the main and assistant model use the same tokenizer")
+        # if not self.config.vocab_size == assistant_model.config.vocab_size:
+        #     raise ValueError("Make sure the main and assistant model use the same tokenizer")
 
     def _validate_model_kwargs(self, model_kwargs: Dict[str, Any]):
         """Validates model kwargs for generation. Generate argument typos will also be caught here."""
@@ -1874,7 +1878,6 @@ class GenerationMixin:
                 raise ValueError(
                     f"assisted generation is not supported with stateful models, such as {self.__class__.__name__}"
                 )
-
             # 11. Get the candidate generator, given the parameterization
             candidate_generator = self._get_candidate_generator(
                 generation_config=generation_config,
@@ -1884,7 +1887,7 @@ class GenerationMixin:
                 logits_processor=logits_processor,
                 model_kwargs=model_kwargs,
             )
-
+            
             # 12. prepare logits warper (if `do_sample` is `True`)
             prepared_logits_warper = (
                 self._get_logits_warper(
@@ -3929,15 +3932,26 @@ class GenerationMixin:
                 start_from_empty_dynamic_cache = True
 
         this_peer_finished = False
+        # 수정 #####################################
+        candidate_generator.num_assistant_tokens = 2
+        ############################################
         while self._has_unfinished_sequences(this_peer_finished, synced_gpus, device=input_ids.device):
+            # print("=================================")
+            # print(candidate_generator.num_assistant_tokens)
+            # print("--small_model--")
+            # print("assistant_inputs_content:", input_ids[0].shape)
             cur_len = input_ids.shape[-1]
-
+            
             #  1. Fetch candidate sequences from a `CandidateGenerator`
             candidate_input_ids, candidate_logits = candidate_generator.get_candidates(input_ids)
             candidate_input_ids = candidate_input_ids.to(self.device)
             if candidate_logits is not None:
                 candidate_logits = candidate_logits.to(self.device)
-
+                
+           
+            # print("assistant_inputs_content:", tokenizer_.decode(input_ids[0]))
+            # print("assistant_output_content:", tokenizer_.decode(candidate_input_ids[0]))
+            # print("assistant_output_content:", tokenizer_.decode(candidate_input_ids[0][-3:]))
             candidate_length = candidate_input_ids.shape[1] - input_ids.shape[1]
             is_done_candidate = stopping_criteria(candidate_input_ids, None)
 
@@ -3968,12 +3982,16 @@ class GenerationMixin:
             # prepare variable output controls (note: some models won't accept all output controls)
             model_inputs.update({"output_attentions": output_attentions} if output_attentions else {})
             model_inputs.update({"output_hidden_states": output_hidden_states} if output_hidden_states else {})
-
+            # print("--main_model--")
             outputs = self(**model_inputs)
-
+            
+            # print("target_inputs_token:", model_inputs["input_ids"][0])
+            # print("target_inputs_contents:", tokenizer_.decode(model_inputs["input_ids"][0]))
+            # print("target_inputs_length:", model_inputs["input_ids"].shape[1])
             # 2.3. Process the new logits
             new_logits = outputs.logits[:, -candidate_length - 1 :]  # excludes the input prompt if present
             next_token_logits = new_logits.clone()
+ 
             if len(logits_processor) > 0:
                 for i in range(candidate_length + 1):
                     new_logits[:, i, :] = logits_processor(candidate_input_ids[:, : cur_len + i], new_logits[:, i, :])
@@ -4010,7 +4028,15 @@ class GenerationMixin:
                 if is_done_candidate and n_matches == candidate_length:
                     n_matches -= 1
                 valid_tokens = selected_tokens[:, : n_matches + 1]
-
+                valid_output_contents = tokenizer_.decode(valid_tokens[0])
+                
+                # 여기서부터 결과값이 갈라져 나온다.
+                # if valid_output_contents == "other must":
+                #     print("160m!!!!!!!!!!!")
+                #     print(new_logits)
+                # elif valid_output_contents == "other popular cultural experience":
+                #     print("1.1b!!!!!!!!!!!!")
+                #     print(new_logits)
             # 4. Update variables according to the number of matching assistant tokens. Remember: the token generated
             # by the model after the last candidate match is also valid, as it is generated from a correct sequence.
             # Because of this last token, assisted generation search reduces to a normal greedy search/sample if there
@@ -4027,6 +4053,7 @@ class GenerationMixin:
             outputs.past_key_values = _crop_past_key_values(self, outputs.past_key_values, new_cache_size)
 
             # 5. Update the candidate generation strategy if needed
+            print(candidate_length, int(n_matches.item()))
             candidate_generator.update_candidate_strategy(input_ids, new_logits, n_matches)
 
             if synced_gpus and this_peer_finished:

@@ -1019,7 +1019,7 @@ class OPTForCausalLM(OPTPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-
+        # print(outputs.past_key_values[0][0].size())
         logits = self.lm_head(outputs[0]).contiguous()
 
         loss = None
